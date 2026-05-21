@@ -15,7 +15,7 @@ import socket
 import threading
 from datetime import datetime
 
-from http_utils import parse_request, recv_request
+from http_utils import parse_request, recv_request_blocking
 
 HOST = "127.0.0.1"
 PORT = 9000
@@ -23,6 +23,11 @@ PORT = 9000
 # The single backend we forward everything to (your threaded_server.py).
 BACKEND_HOST = "127.0.0.1"
 BACKEND_PORT = 8000
+
+# Seconds a client gets to send a complete request before recv() gives up.
+# Without this, a client that connects and stays silent pins a worker thread
+# forever (see silent_client.py).
+CLIENT_TIMEOUT = 10.0
 
 # print() from many threads can interleave mid-line; this keeps each line atomic.
 log_lock = threading.Lock()
@@ -66,7 +71,7 @@ def forward_to_backend(request_bytes):
 def handle_client(conn, addr):
     """Relay one client <-> backend exchange. Runs inside its own thread."""
     try:
-        request_bytes = recv_request(conn)
+        request_bytes = recv_request_blocking(conn)
         if not request_bytes:
             return  # client connected then left without sending anything
 
@@ -93,6 +98,11 @@ def handle_client(conn, addr):
 
         conn.sendall(response_bytes)
         log(f"{method} {path} from {addr[0]} <- relayed {len(response_bytes)} bytes")
+    except socket.timeout:
+        # The client connected but didn't send a full request in time.
+        # recv() raised instead of blocking forever, so this thread can exit.
+        log(f"timeout: {addr[0]} connected but sent no full request in "
+            f"{CLIENT_TIMEOUT}s — dropping")
     except Exception as exc:
         # One thread crashing must not take down the balancer. Log and move on.
         log(f"error handling {addr[0]}: {exc!r}")
@@ -117,6 +127,11 @@ def main():
                 conn, addr = server.accept()
             except socket.timeout:
                 continue  # no one connected this second; loop and check for Ctrl+C
+
+            # settimeout(1.0) above is on the LISTENING socket and only affects
+            # accept(). The accepted connection socket has no timeout of its
+            # own, so give each client its own deadline for sending a request.
+            conn.settimeout(CLIENT_TIMEOUT)
 
             worker = threading.Thread(
                 target=handle_client,

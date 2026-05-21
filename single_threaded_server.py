@@ -7,7 +7,7 @@ and the bytes we write back. This is what HTTP actually is: text over TCP.
 import socket
 from datetime import datetime
 
-from http_utils import parse_request, recv_request
+from http_utils import parse_request, recv_request_blocking
 
 HOST = "127.0.0.1"  # http://localhost:
 PORT = 8000
@@ -45,7 +45,7 @@ def main():
             except socket.timeout:
                 continue  # no one connected this second; loop and check for Ctrl+C
             try:
-                raw = recv_request(conn)
+                raw = recv_request_blocking(conn)
                 if not raw:
                     continue  # client connected then left without sending anything
 

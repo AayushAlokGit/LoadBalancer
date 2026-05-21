@@ -1,4 +1,4 @@
-def recv_request(conn):
+def recv_request_blocking(conn):
     """Read one full HTTP request off the connection and return raw bytes.
 
     TCP is a stream, not a message queue: a single recv() may return half a
@@ -51,4 +51,39 @@ def parse_request(raw):
             headers[name.strip().decode()] = value.strip().decode()
 
     return method, path, headers, body
+
+
+async def recv_request_non_blocking(loop, conn):
+    """Async twin of recv_request_blocking.
+
+    Identical logic — read until the end-of-headers marker, then read exactly
+    Content-Length body bytes — but every conn.recv() is now an awaited
+    loop.sock_recv(). The blocking version in http_utils can't be reused here:
+    a blocking recv() would freeze the entire event loop, not just this
+    coroutine.
+    """
+    data = b""
+
+    # Phase 1: read until the end-of-headers marker appears.
+    while b"\r\n\r\n" not in data:
+        chunk = await loop.sock_recv(conn, 4096)
+        if not chunk:                # client closed the connection
+            return data
+        data += chunk
+
+    # Phase 2: figure out how long the body is, then read exactly that much.
+    head, _, body = data.partition(b"\r\n\r\n")
+    content_length = 0
+    for line in head.split(b"\r\n")[1:]:
+        name, _, value = line.partition(b":")
+        if name.strip().lower() == b"content-length":
+            content_length = int(value.strip())
+
+    while len(body) < content_length:
+        chunk = await loop.sock_recv(conn, 4096)
+        if not chunk:
+            break
+        body += chunk
+
+    return head + b"\r\n\r\n" + body
 

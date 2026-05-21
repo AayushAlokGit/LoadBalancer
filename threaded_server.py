@@ -10,10 +10,15 @@ import socket
 import threading
 from datetime import datetime
 
-from http_utils import parse_request, recv_request
+from http_utils import parse_request, recv_request_blocking
 
 HOST = "127.0.0.1"  # http://localhost:
 PORT = 8000
+
+# Seconds a client gets to send a complete request. See silent_client.py:
+# a client can connect and then send nothing (or only part of a request).
+# Without a deadline, the worker thread blocks in recv() forever and leaks.
+CLIENT_TIMEOUT = 5.0
 
 # print() from many threads at once can interleave mid-line, producing
 # garbled output. This lock makes each log line atomic.
@@ -30,7 +35,7 @@ def log(message):
 def handle_client(conn, addr):
     """Serve one client from start to finish. This runs inside its own thread."""
     try:
-        raw = recv_request(conn)
+        raw = recv_request_blocking(conn)
         if not raw:
             return  # client connected then left without sending anything
 
@@ -50,6 +55,11 @@ def handle_client(conn, addr):
             + response_body
         )
         conn.sendall(response)
+    except socket.timeout:
+        # The client connected but didn't send a full request in time.
+        # recv() raised instead of blocking forever, so this thread can exit.
+        log(f"timeout: {addr[0]} connected but sent no full request in "
+            f"{CLIENT_TIMEOUT}s — dropping")
     except Exception as exc:
         # One thread crashing must not take down the server. Log and move on.
         log(f"error handling {addr[0]}: {exc!r}")
@@ -73,6 +83,20 @@ def main():
                 conn, addr = server.accept()
             except socket.timeout:
                 continue  # no one connected this second; loop and check for Ctrl+C
+
+            # accept() just returned, so a TCP connection is fully established
+            # (the 3-way handshake is done) — even if the client hasn't sent a
+            # single byte yet. Log it here, before any recv(), so silent
+            # clients show up too.
+            log(f"new connection from {addr[0]}:{addr[1]}")
+
+            # The settimeout(1.0) above is on the LISTENING socket — it only
+            # affects accept(). The connection socket accept() just returned
+            # has NO timeout: its recv() would block forever. So give every
+            # accepted client its own deadline. Without this, silent_client.py
+            # pins a worker thread permanently. With it, recv() raises
+            # socket.timeout after CLIENT_TIMEOUT seconds and the thread exits.
+            conn.settimeout(CLIENT_TIMEOUT)
 
             # Hand this client to a worker thread, then immediately loop back
             # to accept the next one. daemon=True means the thread won't keep
