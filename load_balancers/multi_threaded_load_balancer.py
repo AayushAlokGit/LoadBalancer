@@ -12,8 +12,15 @@ backend's full response, and relay that response back to the client.
 """
 
 import socket
+import sys
 import threading
 from datetime import datetime
+from pathlib import Path
+
+# http_utils.py lives in the project root, one directory up from this file.
+# Add the root to sys.path so the import below works regardless of where
+# the script is launched from.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from http_utils import parse_request, recv_request_blocking
 

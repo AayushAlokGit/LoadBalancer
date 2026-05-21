@@ -25,9 +25,16 @@ simply isn't required.
 
 import asyncio
 import socket
+import sys
 from datetime import datetime
+from pathlib import Path
 
-from http_utils import parse_request, recv_request_non_blocking 
+# http_utils.py lives in the project root, one directory up from this file.
+# Add the root to sys.path so the import below works regardless of where
+# the script is launched from.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from http_utils import parse_request, recv_request_non_blocking
 
 HOST = "127.0.0.1"
 PORT = 9000
